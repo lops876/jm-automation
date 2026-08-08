@@ -1,0 +1,42 @@
+name: Daily Sign-in
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC. This is 09:00 in Asia/Shanghai (UTC+8).
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  sign-in:
+    name: Run daily sign-in
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Create runtime configuration
+        env:
+          JM_CONFIG: ${{ secrets.JM_CONFIG }}
+        run: |
+          if [ -z "$JM_CONFIG" ]; then
+            echo "Missing repository secret: JM_CONFIG" >&2
+            exit 1
+          fi
+          printf '%s' "$JM_CONFIG" > config.yaml
+          chmod 600 config.yaml
+
+      - name: Run sign-in
+        run: go run ./cmd/jm-automation -config config.yaml -once
