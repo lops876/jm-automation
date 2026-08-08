@@ -164,6 +164,9 @@ func (c *Client) PostForm(ctx context.Context, path string, formData map[string]
 // DecryptResponse 解密 API 响应
 func (c *Client) DecryptResponse(resp *Response, ts int64) (string, error) {
 	bodyText := strings.TrimSpace(string(resp.Body))
+	if bodyText == "" {
+		return "", fmt.Errorf("服务器返回空响应 (status=%d, content_type=%s)", resp.StatusCode, resp.Headers.Get("Content-Type"))
+	}
 	if strings.HasPrefix(bodyText, "<") {
 		return "", fmt.Errorf("服务器返回 HTML，可能是域名失效或请求特征被拦截 (status=%d, content_type=%s)", resp.StatusCode, resp.Headers.Get("Content-Type"))
 	}
@@ -307,12 +310,13 @@ func (c *Client) doWithBaseURLFallback(execute func(baseURL string) (*Response, 
 			lastErr = err
 			continue
 		}
-		if !looksLikeHTML(resp) {
+		if reason := invalidAPIResponseReason(resp); reason == "" {
 			c.setBaseURL(baseURL)
 			return resp, nil
+		} else {
+			lastResp = resp
+			lastErr = fmt.Errorf("无效 API 响应 (%s, base_url=%s)", reason, baseURL)
 		}
-		lastResp = resp
-		lastErr = fmt.Errorf("服务器返回 HTML (status=%d, base_url=%s)", resp.StatusCode, baseURL)
 	}
 
 	if lastResp != nil {
@@ -363,9 +367,36 @@ func (c *Client) requestBaseURLs() []string {
 }
 
 func looksLikeHTML(resp *Response) bool {
+	if resp == nil {
+		return false
+	}
 	body := strings.TrimSpace(string(resp.Body))
 	contentType := strings.ToLower(resp.Headers.Get("Content-Type"))
 	return strings.HasPrefix(body, "<") || strings.Contains(contentType, "text/html")
+}
+
+// invalidAPIResponseReason returns a reason when a response cannot be an API
+// response encrypted by the target service. Such responses should cause a
+// retry with the next candidate domain instead of failing during decryption.
+func invalidAPIResponseReason(resp *Response) string {
+	if resp == nil {
+		return "empty response object"
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Sprintf("status=%d", resp.StatusCode)
+	}
+
+	body := strings.TrimSpace(string(resp.Body))
+	if body == "" {
+		return "empty body"
+	}
+	if looksLikeHTML(resp) {
+		return "HTML response"
+	}
+	if !json.Valid([]byte(body)) {
+		return "non-JSON body"
+	}
+	return ""
 }
 
 func (c *Client) SetCookies(cookies []*http.Cookie) {

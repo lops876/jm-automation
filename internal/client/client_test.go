@@ -193,6 +193,14 @@ func TestDecryptResponseRejectsMalformedResponses(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name: "empty response",
+			resp: &Response{
+				StatusCode: http.StatusOK,
+				Headers:    http.Header{},
+			},
+			wantErr: "服务器返回空响应",
+		},
+		{
 			name: "non json response",
 			resp: &Response{
 				StatusCode: http.StatusOK,
@@ -259,6 +267,39 @@ func TestDecryptResponseRejectsMalformedResponses(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestDoWithBaseURLFallbackRetriesInvalidAPIResponses(t *testing.T) {
+	c := &Client{
+		baseURL:    "https://empty.test",
+		baseURLs:   []string{"https://empty.test", "https://valid.test"},
+		cookieFile: t.TempDir() + "/session.json",
+	}
+
+	calls := make([]string, 0, 2)
+	resp, err := c.doWithBaseURLFallback(func(baseURL string) (*Response, error) {
+		calls = append(calls, baseURL)
+		if baseURL == "https://empty.test" {
+			return &Response{StatusCode: http.StatusOK, Headers: http.Header{}}, nil
+		}
+		return &Response{
+			StatusCode: http.StatusOK,
+			Body:       []byte(`{"code":200,"data":"encrypted"}`),
+			Headers:    http.Header{"Content-Type": {"application/json"}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("fallback request failed: %v", err)
+	}
+	if got := strings.Join(calls, ","); got != "https://empty.test,https://valid.test" {
+		t.Fatalf("called base URLs = %q, want empty then valid", got)
+	}
+	if got := c.BaseURL(); got != "https://valid.test" {
+		t.Fatalf("baseURL = %q, want promoted working base URL", got)
+	}
+	if string(resp.Body) != `{"code":200,"data":"encrypted"}` {
+		t.Fatalf("response body = %q, want valid fallback response", string(resp.Body))
 	}
 }
 
